@@ -7,11 +7,13 @@
 #include <unistd.h>
 #include <time.h>
 #include <string.h>
+#include <stdbool.h>
 
 struct Exam {
 	int count_passed_students;
 	int student_id;
 	int variant;
+	bool task_solved;
 	int mark;
 	char *ans;
 };
@@ -21,7 +23,6 @@ const char exam_teacher_semaphore_name[] = "exam_teacher_semaphore";
 const char exam_student_semaphore_name[] = "exam_student_semaphore";
 
 int main(int argc, char* argv[]) {
-	srand(time(NULL));
 	int n;
 	if (argc < 2) {
 		printf("%s\n", "Incorrect number of arguments.");
@@ -43,6 +44,7 @@ int main(int argc, char* argv[]) {
 	exam->count_passed_students = 0;
 	exam->variant = 0;
 	exam->mark = 0;
+	exam->task_solved = false;
 	exam->ans = malloc(1);
         strcpy(exam->ans, "");
 
@@ -55,7 +57,7 @@ int main(int argc, char* argv[]) {
 		for (int i = 0; i < n; ++i) {
 			student_process_id = fork();
 			if (!student_process_id) {
-				student_id = i;
+				student_id = i + 1;
 				break;
 			}
 
@@ -71,7 +73,9 @@ int main(int argc, char* argv[]) {
 					exam->student_id,
 					exam->variant);
 				exam->variant = 0;
-				sleep(0.1);
+				while (!exam->task_solved) {
+					sleep(0.1);
+				}
 				printf("Преподаватель получил ответ студента %d и начал проверять работу\n",
 					exam->student_id);
 					
@@ -81,12 +85,30 @@ int main(int argc, char* argv[]) {
 					exam->mark);
 			}
 		}
+		
+		kill(teacher_process_id, SIGTERM);
+		for (int i = 0; i < n; ++i) {
+			kill(student_process_ids[i], SIGTERM);
+		}
+
+		waitpid(teacher_process_id, 0, 0);
+		for (int i = 0; i < n; ++i) {
+			waitpid(student_process_ids[i], 0, 0);
+		}
+
+
+		shm_unlink(shared_memory_path);
+		sem_unlink(exam_student_semaphore_name);
+		sem_unlink(exam_teacher_semaphore_name);
+		munmap(exam, sizeof(struct Exam));
+		return 0;
 	}
 
 	if (!student_process_id) {
 		sem_wait(exam_student_semaphore);
 		exam->student_id = student_id;
 		printf("Студент %d заходит в аудиторию\n", student_id);
+		srand(time(NULL));
 		exam->variant = rand() % 30 + 1;
 		printf("Студент %d вытягивает билет %d\n", student_id, exam->variant);
 		sem_post(exam_teacher_semaphore);
@@ -97,6 +119,7 @@ int main(int argc, char* argv[]) {
         		sleep(0.1);
         	}
 		printf("Студент %d решил билет и передал решение преподавателю\n", student_id);
+		exam->task_solved = true;
 		while (exam->mark == 0) {
 			sleep(0.1);
 		}
@@ -106,9 +129,11 @@ int main(int argc, char* argv[]) {
 		++exam->count_passed_students;
 		exam->ans = malloc(1);
         	strcpy(exam->ans, "");
-        	exam->mark = 0;
+        	exam->mark = 0;	
+        	exam->task_solved = false;	
+        	sleep(3);
 		sem_post(exam_student_semaphore);
-		sleep(1);
+
 	}
 
 	if (teacher_process_id && student_process_id) { // main process
@@ -130,6 +155,7 @@ int main(int argc, char* argv[]) {
 		sem_unlink(exam_student_semaphore_name);
 		sem_unlink(exam_teacher_semaphore_name);
 		munmap(exam, sizeof(struct Exam));
+		return  0;
 	}
 
 	return 0;
